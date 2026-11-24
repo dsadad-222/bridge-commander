@@ -1,0 +1,728 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bridge Commander</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0"></script>
+<script>
+tailwind.config = { theme: { extend: {
+  fontFamily: { sans: ['Inter','system-ui','sans-serif'] },
+  colors: {
+    bg: '#1a1816', card: '#24211e', 'card-hover':'#2a2723', border:'#322f2b', 'border-light':'#3c3833',
+    accent:'#c4954f','accent-muted':'#a47d42','accent-bg':'rgba(196,149,79,0.1)',
+    success:'#7ea87e','warn':'#c49f4f','danger':'#b85c5c',
+    text:'#e0d8cc','text-muted':'#9a9488','text-faint':'#6b655c',
+  }
+}}}
+</script>
+<style>
+:root{color-scheme:dark} body{background:#1a1816;overflow-x:hidden}
+.glass{background:rgba(36,33,30,0.85);backdrop-filter:blur(16px);border:1px solid #322f2b}
+.glass:hover{background:rgba(42,39,35,0.9);border-color:#3c3833}
+.dot{width:8px;height:8px;border-radius:50%;display:inline-block}
+.dot.on{background:#7ea87e;box-shadow:0 0 6px rgba(126,168,126,0.6);animation:pulse 3s ease-in-out infinite}
+.dot.off{background:#b85c5c;opacity:.6}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+.trans{transition:all .25s cubic-bezier(.4,0,.2,1)}
+.stat-num{font-size:28px;font-weight:800;letter-spacing:-.5px;line-height:1}
+.stat-label{font-size:10px;color:#6b655c;text-transform:uppercase;letter-spacing:.8px}
+.chart-wrap{position:relative;height:160px}
+.log-scroll{scrollbar-width:thin;scrollbar-color:#322f2b transparent}
+.log-scroll::-webkit-scrollbar{width:4px}
+.log-scroll::-webkit-scrollbar-thumb{background:#322f2b;border-radius:2px}
+.model-card{transition:all .2s;cursor:pointer}
+.model-card:hover{transform:translateY(-1px)}
+.model-card:active{transform:scale(.98)}
+.badge{padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600;letter-spacing:.3px}
+.btn{padding:6px 16px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;transition:all .2s;border:1px solid #322f2b;background:transparent;color:#9a9488}
+.btn:hover{background:rgba(255,255,255,.03);color:#e0d8cc;border-color:#3c3833}
+.btn-accent{background:#c4954f;color:#1a1816;border-color:#c4954f}
+.btn-accent:hover{background:#d4a65f}
+.btn-accent:disabled{opacity:.45;cursor:not-allowed;transform:none}
+.btn-accent:disabled:hover{background:#c4954f}
+.btn-danger{color:#d48484;border-color:rgba(184,92,92,.3);background:rgba(184,92,92,.08)}
+.btn-danger:hover{background:rgba(184,92,92,.18)}
+.spin{animation:spin .7s linear infinite} @keyframes spin{to{transform:rotate(360deg)}}
+.slide-in{animation:slideIn .35s ease-out} @keyframes slideIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+.toast{animation:slideUp .3s ease-out} @keyframes slideUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:100;display:flex;align-items:center;justify-content:center}
+.modal{background:#24211e;border:1px solid #322f2b;border-radius:16px;padding:24px;width:480px;max-width:90vw;max-height:80vh;overflow-y:auto}
+.tab{font-size:11px;color:#6b655c;padding:4px 10px;border-radius:6px;cursor:pointer;transition:all .15s}
+.tab.active,.tab:hover{color:#e0d8cc;background:rgba(196,149,79,.12)}
+</style>
+</head>
+<body class="font-sans antialiased">
+
+<!-- Toast -->
+<div id="toast" class="fixed bottom-8 left-1/2 -translate-x-1/2 z-50 px-5 py-2.5 rounded-xl text-sm font-medium shadow-lg" style="display:none"></div>
+
+<!-- Settings Modal -->
+<div id="settingsOverlay" class="modal-overlay" style="display:none" onclick="if(event.target===this)closeSettings()">
+  <div class="modal slide-in">
+    <div class="flex items-center justify-between mb-5">
+      <h3 class="text-sm font-semibold text-text">偏好设置</h3>
+      <button onclick="closeSettings()" class="text-text-faint hover:text-text text-lg">&times;</button>
+    </div>
+    <div class="space-y-4">
+      <div><label class="text-[11px] text-text-faint block mb-1.5">轮询间隔 (秒)</label>
+        <input id="settingsPollInterval" type="number" min="3" max="30" class="w-full bg-[#1a1816] border border-border rounded-lg px-3 py-2 text-sm text-text focus:border-accent outline-none"></div>
+      <div><label class="text-[11px] text-text-faint block mb-1.5">Fallback 告警阈值 (次)</label>
+        <input id="settingsFallbackThresh" type="number" min="1" max="50" class="w-full bg-[#1a1816] border border-border rounded-lg px-3 py-2 text-sm text-text focus:border-accent outline-none"></div>
+      <div><label class="text-[11px] text-text-faint block mb-1.5">延迟告警阈值 (秒)</label>
+        <input id="settingsLatencyThresh" type="number" min="1" max="30" class="w-full bg-[#1a1816] border border-border rounded-lg px-3 py-2 text-sm text-text focus:border-accent outline-none"></div>
+      <button onclick="saveSettingsNative()" class="btn btn-accent w-full">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- Diagnose Modal -->
+<div id="diagOverlay" class="modal-overlay" style="display:none" onclick="if(event.target===this)closeDiag()">
+  <div class="modal slide-in" style="width:560px">
+    <div class="flex items-center justify-between mb-4">
+      <h3 class="text-sm font-semibold text-text">全链路诊断</h3>
+      <button onclick="closeDiag()" class="text-text-faint hover:text-text text-lg">&times;</button>
+    </div>
+    <div id="diagContent"></div>
+  </div>
+</div>
+
+<!-- Benchmark Modal -->
+<div id="benchOverlay" class="modal-overlay" style="display:none" onclick="if(event.target===this)closeBench()">
+  <div class="modal slide-in" style="width:640px">
+    <div class="flex items-center justify-between mb-4">
+      <h3 class="text-sm font-semibold text-text">模型横向测速</h3>
+      <button onclick="closeBench()" class="text-text-faint hover:text-text text-lg">&times;</button>
+    </div>
+    <div class="flex items-center gap-3 mb-4">
+      <button id="benchBtn" onclick="runBenchNative()" class="btn btn-accent text-[11px]">全部测速</button>
+      <button id="benchStopBtn" onclick="stopBenchNative()" class="btn btn-danger text-[11px]" style="display:none">强制停止</button>
+      <span class="text-[10px] text-text-faint">逐个检测延迟与可用性</span>
+    </div>
+    <div id="benchResults" class="space-y-1.5">
+      <p id="benchHint" class="text-xs text-text-faint text-center py-4">点击「全部测速」开始</p>
+    </div>
+  </div>
+</div>
+
+<!-- Main -->
+<main class="max-w-7xl mx-auto px-5 py-6">
+
+  <!-- Header -->
+  <header class="flex items-center justify-between mb-6">
+    <div class="flex items-center gap-3">
+      <div class="w-8 h-8 rounded-xl flex items-center justify-center text-xs font-extrabold" style="background:linear-gradient(135deg,#c4954f,#a47d42);color:#1a1816">B</div>
+      <div>
+        <h1 class="text-base font-bold text-text tracking-tight">Bridge Commander</h1>
+        <p class="text-[10px] text-text-faint">AI 代理链路 · 四路客户端 · 8 模型</p>
+      </div>
+    </div>
+    <div class="flex items-center gap-1.5">
+      <button onclick="openDiag()" class="btn text-[11px]">诊断</button>
+      <button onclick="openBench()" class="btn text-[11px]">测速</button>
+      <button onclick="openSettings()" class="btn text-[11px]">设置</button>
+      <button onclick="doRestartNative('zen')" class="btn btn-danger text-[11px]" title="重启 Zen">重启</button>
+      <span class="text-[10px] text-text-faint ml-1"><span id="clock">--:--:--</span></span>
+    </div>
+  </header>
+
+  <!-- Row 1: Three status cards -->
+  <div class="grid grid-cols-3 gap-4 mb-4">
+    <!-- Zen Bridge -->
+    <div class="glass rounded-2xl p-4 trans">
+      <div class="flex items-center justify-between mb-3">
+        <div class="flex items-center gap-2"><span id="zen-dot" class="dot off"></span><span class="text-[13px] font-semibold text-text">Zen Bridge</span></div>
+        <span class="text-[9px] text-text-faint font-mono">:18790 → OpenCode</span>
+      </div>
+      <div class="flex items-baseline gap-2"><span id="zen-req" class="stat-num text-text">0</span><span class="text-[11px] text-text-muted">次请求</span></div>
+      <div class="flex gap-3 mt-1.5 text-[10px]">
+        <span class="text-success">✓ <span id="zen-ok">0</span></span>
+        <span id="zen-fail-wrap" style="display:none" class="text-danger">✗ <span id="zen-fail">0</span></span>
+        <span id="zen-fb-wrap" style="display:none" class="text-warn">↻ <span id="zen-fb">0</span></span>
+      </div>
+      <p id="zen-uptime" class="text-[10px] text-text-faint mt-1.5" style="display:none"></p>
+    </div>
+    <!-- Claudian Bridge -->
+    <div class="glass rounded-2xl p-4 trans">
+      <div class="flex items-center justify-between mb-3">
+        <div class="flex items-center gap-2"><span id="cl-dot" class="dot off"></span><span class="text-[13px] font-semibold text-text">Claudian Bridge</span></div>
+        <span class="text-[9px] text-text-faint font-mono">:15722 · Claude→OpenAI</span>
+      </div>
+      <div class="flex items-baseline gap-2"><span id="cl-req" class="stat-num text-text">0</span><span class="text-[11px] text-text-muted">次转发</span></div>
+      <div class="flex gap-3 mt-1.5 text-[10px]">
+        <span class="text-success">✓ <span id="cl-ok">0</span></span>
+        <span id="cl-fail-wrap" style="display:none" class="text-danger">✗ <span id="cl-fail">0</span></span>
+      </div>
+      <p id="cl-uptime" class="text-[10px] text-text-faint mt-1.5" style="display:none"></p>
+    </div>
+    <!-- Watchdog -->
+    <div class="glass rounded-2xl p-4 trans">
+      <div class="flex items-center justify-between mb-3">
+        <div class="flex items-center gap-2"><span id="wd-dot" class="dot off"></span><span class="text-[13px] font-semibold text-text">守护进程</span></div>
+        <span id="wd-hb" class="text-[9px] text-text-faint">—</span>
+      </div>
+      <div class="flex items-baseline gap-2"><span id="wd-restarts" class="stat-num text-text">0</span><span class="text-[11px] text-text-muted">次自动恢复</span></div>
+      <div class="flex gap-4 mt-1.5 text-[10px] text-text-muted"><span>Zen <b id="wd-rz" class="text-accent">0</b></span><span>Claudian <b id="wd-rc" class="text-accent">0</b></span></div>
+      <p id="wd-status" class="text-[10px] text-text-faint mt-1.5">待启动</p>
+    </div>
+  </div>
+
+  <!-- Row 2: Quota + Today + Clients -->
+  <div class="grid grid-cols-3 gap-4 mb-4">
+    <!-- Quota -->
+    <div class="glass rounded-2xl p-4">
+      <h3 class="text-[10px] text-text-faint uppercase tracking-wider mb-3">今日配额</h3>
+      <div class="flex items-center gap-4">
+        <div class="relative w-20 h-20 flex-shrink-0">
+          <svg viewBox="0 0 80 80" class="w-full h-full">
+            <circle cx="40" cy="40" r="34" fill="none" stroke="#322f2b" stroke-width="6"/>
+            <circle id="quota-ring" cx="40" cy="40" r="34" fill="none" stroke="#7ea87e" stroke-width="6"
+              stroke-linecap="round" stroke-dasharray="213.6" stroke-dashoffset="213.6"/>
+          </svg>
+          <div class="absolute inset-0 flex flex-col items-center justify-center">
+            <span id="quota-rem" class="text-xl font-extrabold text-text">100</span>
+            <span class="text-[9px] text-text-faint">/ 100</span>
+          </div>
+        </div>
+        <div class="flex flex-col gap-2 text-xs">
+          <div><span class="text-text-faint">已用 </span><span id="quota-used" class="text-text font-semibold">0</span></div>
+          <div><span class="text-text-faint">剩余 </span><span id="quota-rem-text" class="font-semibold text-success">100</span></div>
+          <div><span class="text-text-faint">占比 </span><span id="quota-pct" class="text-text font-semibold">0%</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Today Stats -->
+    <div class="glass rounded-2xl p-4 flex flex-col">
+      <h3 class="text-[10px] text-text-faint uppercase tracking-wider mb-3">今日用量</h3>
+      <div class="flex gap-6">
+        <div><span id="today-req" class="stat-num text-text">0</span><span class="block text-[10px] text-text-muted mt-0.5">总请求</span></div>
+        <div><span id="today-fb" class="stat-num text-text">0</span><span class="block text-[10px] text-text-muted mt-0.5">降级</span></div>
+        <div><span id="today-qps" class="stat-num text-text">0</span><span class="block text-[10px] text-text-muted mt-0.5">峰值 QPS</span></div>
+      </div>
+      <div class="chart-wrap flex-1 mt-2"><canvas id="qpsChart"></canvas></div>
+    </div>
+
+    <!-- Clients -->
+    <div class="glass rounded-2xl p-4">
+      <h3 class="text-[10px] text-text-faint uppercase tracking-wider mb-3">客户端</h3>
+      <div id="clients-container" class="space-y-2">
+        <p class="text-[11px] text-text-faint">检测中...</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Row 3: Models -->
+  <div class="glass rounded-2xl p-4 mb-4">
+    <div class="flex items-center justify-between mb-3">
+      <h3 class="text-[10px] text-text-faint uppercase tracking-wider">可用模型（OpenCode Zen 免费层）</h3>
+      <button onclick="openBench()" class="btn text-[11px]">横向测速</button>
+    </div>
+    <div id="models-container" class="grid grid-cols-4 gap-2">
+      <p class="text-[11px] text-text-faint col-span-4 text-center py-4">加载中...</p>
+    </div>
+  </div>
+
+  <!-- Row 4: Events + Logs -->
+  <div class="grid grid-cols-3 gap-4 mb-4">
+    <!-- Events -->
+    <div class="glass rounded-2xl p-4">
+      <h3 class="text-[10px] text-text-faint uppercase tracking-wider mb-3">提醒</h3>
+      <div id="events-container">
+        <div class="flex flex-col items-center justify-center py-5 text-center">
+          <div class="w-8 h-8 rounded-full flex items-center justify-center mb-2" style="background:rgba(126,168,126,.1)">
+            <svg class="w-4 h-4 text-success" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+          </div>
+          <span class="text-[12px] text-text-muted">一切正常，安心使用</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Logs -->
+    <div class="glass rounded-2xl p-4 col-span-2">
+      <div class="flex items-center justify-between mb-3">
+        <div class="flex gap-1">
+          <span onclick="switchLogTab('zen')" id="tab-zen" class="tab active">Zen 日志</span>
+          <span onclick="switchLogTab('claudian')" id="tab-claudian" class="tab">Claudian 日志</span>
+          <span onclick="switchLogTab('watchdog')" id="tab-watchdog" class="tab">守护日志</span>
+        </div>
+        <span class="text-[9px] text-text-faint">最近 200 行 · 自动滚动</span>
+      </div>
+      <div class="log-scroll overflow-y-auto rounded-xl p-3 max-h-44" style="background:rgba(0,0,0,.25);font-size:10px">
+        <pre id="log-content" class="font-mono leading-relaxed whitespace-pre-wrap" style="color:#7a7368">暂无日志</pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- Topology -->
+  <div class="glass rounded-2xl p-4 mb-4">
+    <h3 class="text-[10px] text-text-faint uppercase tracking-wider mb-3">链路拓扑</h3>
+    <div id="topology-container" class="flex items-center justify-center gap-0 overflow-x-auto py-3"></div>
+  </div>
+
+</main>
+
+<script>
+// ===================== DATA ENGINE =====================
+const MODEL_META = {
+  "deepseek-v4-flash-free":{"type":"chat","tag":"主力","desc":"284B MoE，支持工具调用","color":"#c4954f"},
+  "ling-3.0-flash-free":{"type":"chat","tag":"备用","desc":"轻量快速，日常对话","color":"#7ea87e"},
+  "ling-3.0-tiny-free":{"type":"chat","tag":"轻量","desc":"极速推理，简单场景","color":"#6b9eb4"},
+  "mimo-v2.5-free":{"type":"chat","tag":"推理","desc":"慢思考深度推理","color":"#a46fb4"},
+  "nemotron-3-ultra-free":{"type":"chat","tag":"综合","desc":"NVIDIA Nemotron，综合强","color":"#7eb47e"},
+  "north-mini-code-free":{"type":"code","tag":"编程","desc":"代码专项，补全/生成","color":"#b46f6f"},
+  "laguna-s-2.1-free":{"type":"chat","tag":"通用","desc":"通用对话，均衡稳定","color":"#7e8eb4"},
+  "longcat-2.0-free":{"type":"chat","tag":"长文","desc":"超长上下文，文档分析","color":"#b49f6f"}
+};
+
+let currentData = null;
+
+// Clock
+setInterval(() => {
+  document.getElementById('clock').textContent =
+    new Date().toLocaleTimeString('zh-CN', {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+}, 1000);
+document.getElementById('clock').textContent =
+  new Date().toLocaleTimeString('zh-CN', {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+
+// ===================== DATA POLLING =====================
+async function fetchData() {
+  try {
+    const r = await fetch('/api/status');
+    currentData = await r.json();
+    refreshUI(currentData);
+  } catch(e) {}
+}
+
+setInterval(fetchData, 5000);
+setTimeout(fetchData, 100); // initial load
+
+// ===================== UI REFRESH =====================
+function refreshUI(d) {
+  // Zen Bridge
+  const zen = d.zen || {};
+  document.getElementById('zen-dot').className = 'dot ' + (zen.ok ? 'on' : 'off');
+  document.getElementById('zen-req').textContent = (zen.req_total || 0).toLocaleString();
+  document.getElementById('zen-ok').textContent = zen.req_ok || 0;
+  const zf = zen.req_fail || 0;
+  document.getElementById('zen-fail-wrap').style.display = zf > 0 ? '' : 'none';
+  document.getElementById('zen-fail').textContent = zf;
+  const zfb = zen.fallback || 0;
+  document.getElementById('zen-fb-wrap').style.display = zfb > 0 ? '' : 'none';
+  document.getElementById('zen-fb').textContent = zfb;
+  const zu = zen.uptime || '';
+  const zuel = document.getElementById('zen-uptime');
+  zuel.style.display = zu ? '' : 'none';
+  zuel.textContent = zu ? '运行 ' + zu : '';
+
+  // Claudian Bridge
+  const cl = d.cl || {};
+  document.getElementById('cl-dot').className = 'dot ' + (cl.ok ? 'on' : 'off');
+  document.getElementById('cl-req').textContent = (cl.req_total || 0).toLocaleString();
+  document.getElementById('cl-ok').textContent = cl.req_ok || 0;
+  const cf = cl.req_fail || 0;
+  document.getElementById('cl-fail-wrap').style.display = cf > 0 ? '' : 'none';
+  document.getElementById('cl-fail').textContent = cf;
+  const cu = cl.uptime || '';
+  const cuel = document.getElementById('cl-uptime');
+  cuel.style.display = cu ? '' : 'none';
+  cuel.textContent = cu ? '运行 ' + cu : '';
+
+  // Watchdog
+  const wd = d.watchdog || {};
+  document.getElementById('wd-dot').className = 'dot ' + (wd.alive ? 'on' : 'off');
+  document.getElementById('wd-hb').textContent = wd.heartbeat || '—';
+  const wr = (wd.restarts_zen || 0) + (wd.restarts_cl || 0);
+  document.getElementById('wd-restarts').textContent = wr;
+  document.getElementById('wd-rz').textContent = wd.restarts_zen || 0;
+  document.getElementById('wd-rc').textContent = wd.restarts_cl || 0;
+  document.getElementById('wd-status').textContent = wd.alive ? '5s 巡检中' : '待启动';
+
+  // Quota
+  const q = d.quotas || {};
+  const pct = q.pct || 0;
+  const rem = q.remaining !== undefined ? q.remaining : (100 - (q.used || 0));
+  document.getElementById('quota-rem').textContent = rem;
+  document.getElementById('quota-used').textContent = q.used || 0;
+  document.getElementById('quota-rem-text').textContent = rem;
+  document.getElementById('quota-rem-text').className = 'font-semibold ' + (rem <= 10 ? 'text-danger' : 'text-success');
+  document.getElementById('quota-pct').textContent = pct + '%';
+  // ring
+  const ring = document.getElementById('quota-ring');
+  const circ = 213.6;
+  ring.setAttribute('stroke-dashoffset', circ - circ * pct / 100);
+  ring.setAttribute('stroke', pct >= 90 ? '#b85c5c' : pct >= 70 ? '#c49f4f' : '#7ea87e');
+
+  // Today
+  const t = d.today || {};
+  document.getElementById('today-req').textContent = (t.requests || 0).toLocaleString();
+  document.getElementById('today-fb').textContent = t.fallbacks || 0;
+  document.getElementById('today-fb').className = 'stat-num ' + (t.fallbacks > 0 ? 'text-warn' : 'text-text');
+  document.getElementById('today-qps').textContent = (t.peak_qps || 0).toFixed(1);
+
+  // Clients
+  renderClients(d.clients);
+
+  // Models
+  renderModels(d.models);
+
+  // Events
+  renderEvents(d.events);
+
+  // Topology
+  renderTopology(d);
+
+  // Log fetch (first time only)
+  if (!d._logsFetched) { fetchLog('zen'); d._logsFetched = true; }
+}
+
+// ===================== RENDER FUNCTIONS =====================
+function renderClients(clients) {
+  const c = document.getElementById('clients-container');
+  if (!clients || Object.keys(clients).length === 0) {
+    c.innerHTML = '<p class="text-[11px] text-text-faint">检测中...</p>';
+    return;
+  }
+  let html = '';
+  for (const [cid, v] of Object.entries(clients)) {
+    html += '<div class="flex items-center justify-between py-1.5">' +
+      '<div class="flex items-center gap-2">' +
+      '<span class="dot ' + (v.ok ? 'on' : 'off') + '" style="width:6px;height:6px"></span>' +
+      '<span class="text-[12px] text-text">' + (v.name || cid) + '</span>' +
+      '<span class="text-[9px] text-text-faint font-mono">' + (v.model || '') + '</span></div>' +
+      '<span class="text-[9px] text-text-faint font-mono truncate ml-2 max-w-[120px]">' + (v.target || '') + '</span></div>';
+  }
+  c.innerHTML = html;
+}
+
+function renderModels(ids) {
+  const c = document.getElementById('models-container');
+  if (!ids || ids.length === 0) {
+    c.innerHTML = '<p class="text-[11px] text-text-faint col-span-4 text-center py-4">暂无模型数据</p>';
+    return;
+  }
+  let html = '';
+  for (const id of ids) {
+    const m = MODEL_META[id] || { type: 'unknown', tag: '', desc: '', color: '#888' };
+    html += '<div class="model-card rounded-xl p-3" style="background:rgba(0,0,0,.2); border:1px solid ' + m.color + '20"' +
+      ' onclick="doTest(\'' + id + '\')">' +
+      '<div class="flex items-center justify-between mb-1.5">' +
+      '<span class="text-[11px] font-semibold text-text truncate">' + id + '</span>' +
+      '<span class="badge" style="background:' + m.color + '20;color:' + m.color + '">' + m.tag + '</span></div>' +
+      '<p class="text-[10px] text-text-faint leading-relaxed">' + m.desc + '</p>' +
+      '<div class="flex items-center gap-1.5 mt-2">' +
+      '<span class="text-[9px] text-text-faint px-1.5 py-0.5 rounded" style="background:rgba(255,255,255,.03)">' + m.type + '</span>' +
+      '<span class="text-[9px] text-accent cursor-pointer hover:underline" onclick="event.stopPropagation();doTest(\'' + id + '\')">测试</span>' +
+      '<span id="test-' + id.replace(/[^a-zA-Z0-9-]/g, '_') + '" class="text-[9px] text-text-faint" style="display:none"></span>' +
+      '</div></div>';
+  }
+  c.innerHTML = html;
+}
+
+function renderEvents(events) {
+  const c = document.getElementById('events-container');
+  if (!events || events.length === 0) {
+    c.innerHTML = '<div class="flex flex-col items-center justify-center py-5 text-center">' +
+      '<div class="w-8 h-8 rounded-full flex items-center justify-center mb-2" style="background:rgba(126,168,126,.1)">' +
+      '<svg class="w-4 h-4 text-success" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg></div>' +
+      '<span class="text-[12px] text-text-muted">一切正常，安心使用</span></div>';
+    return;
+  }
+  let html = '';
+  for (const e of events) {
+    const clr = e.type === 'warn' ? '#c49f4f' : e.type === 'error' ? '#b85c5c' : '#9a9488';
+    html += '<div class="flex items-start gap-2 py-1.5">' +
+      '<span class="text-[10px] mt-0.5" style="color:' + clr + '">●</span>' +
+      '<span class="text-[11px] text-text-muted">' + (e.text || '') + '</span></div>';
+  }
+  c.innerHTML = html;
+}
+
+function renderTopology(d) {
+  const c = document.getElementById('topology-container');
+  const z = d.zen || {};
+  const cl = d.cl || {};
+  const clients = d.clients || {};
+
+  const obsOk = clients.obsidian?.ok;
+  const codexOk = clients.codex?.ok;
+  const clawOk = clients.openclaw?.ok;
+  const hermOk = clients.hermes?.ok;
+
+  const node = (label, ok, status) =>
+    '<div class="flex flex-col items-center px-3 py-2 rounded-xl" style="background:rgba(0,0,0,.2); border:1px solid ' + (ok ? '#7ea87e40' : '#b85c5c30') + '; min-width:80px">' +
+    '<span class="text-[11px] font-semibold text-text">' + label + '</span>' +
+    '<span class="text-[9px] font-mono" style="color:' + (ok ? '#7ea87e' : '#b85c5c') + '">' + status + '</span></div>';
+
+  const connector = '<div class="flex items-center mx-2"><div class="w-8 h-px" style="background:linear-gradient(90deg,#3c3833,#c4954f,#3c3833)"></div><div class="w-1.5 h-1.5 rounded-full bg-accent mx-1"></div><div class="w-8 h-px" style="background:linear-gradient(90deg,#3c3833,#c4954f,#3c3833)"></div></div>';
+  const arrow = '<span class="text-text-faint mx-1 text-lg">→</span>';
+
+  c.innerHTML =
+    node('Obsidian', obsOk, obsOk ? '在线' : '离线') +
+    node('Codex', codexOk, codexOk ? '在线' : '离线') +
+    node('OpenClaw', clawOk, clawOk ? '在线' : '离线') +
+    node('Hermes', hermOk, hermOk ? '在线' : '离线') +
+    connector +
+    node('Claudian', cl.ok, cl.ok ? '在线' : (cl.req_total > 0 ? '异常' : '离线')) +
+    arrow +
+    node('Zen Bridge', z.ok, z.ok ? '在线' : '离线') +
+    arrow +
+    node('OpenCode Zen', true, '免费层');
+}
+
+// ===================== CHART =====================
+let qpsChart = null;
+
+function initChart() {
+  const ctx = document.getElementById('qpsChart')?.getContext('2d');
+  if (!ctx) return;
+  qpsChart = new Chart(ctx, {
+    type: 'line',
+    data: { labels: [], datasets: [{ data: [], borderColor: '#c4954f', backgroundColor: 'rgba(196,149,79,0.04)', borderWidth: 1.5, fill: true, tension: .35, pointRadius: 0 }] },
+    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { enabled: false } }, scales: { x: { display: false }, y: { display: false, beginAtZero: true } }, animation: { duration: 400 } }
+  });
+  // fetch history data
+  updateChart();
+  setInterval(updateChart, 60000);
+}
+
+async function updateChart() {
+  if (!qpsChart) return;
+  try {
+    const r = await fetch('/api/history?minutes=60');
+    const rows = await r.json();
+    if (!rows || rows.length < 2) return;
+    const labels = [], values = [];
+    let prev = rows[0];
+    for (const row of rows) {
+      labels.push(new Date(row.ts * 1000).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }));
+      values.push(parseFloat(((row.zen_req - prev.zen_req) / Math.max(5, row.ts - prev.ts)).toFixed(1)));
+      prev = row;
+    }
+    qpsChart.data.labels = labels;
+    qpsChart.data.datasets[0].data = values;
+    qpsChart.update('none');
+  } catch(_) {}
+}
+
+setTimeout(initChart, 500);
+
+// ===================== LOGS =====================
+let currentLogTab = 'zen';
+
+function switchLogTab(src) {
+  currentLogTab = src;
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.getElementById('tab-' + src).classList.add('active');
+  fetchLog(src);
+}
+
+async function fetchLog(src) {
+  try {
+    const r = await fetch('/api/logs/' + src);
+    const d = await r.json();
+    const el = document.getElementById('log-content');
+    el.textContent = (d.lines || []).join('\n') || '暂无日志';
+    const scroll = el.closest('.log-scroll');
+    if (scroll) scroll.scrollTop = scroll.scrollHeight;
+  } catch(_) {
+    document.getElementById('log-content').textContent = '无法加载';
+  }
+}
+
+// ===================== INDIVIDUAL MODEL TEST =====================
+async function doTest(model) {
+  showToast(true, '测试 ' + model + '...');
+  const safeId = 'test-' + model.replace(/[^a-zA-Z0-9-]/g, '_');
+  try {
+    const r = await fetch('/api/test/' + model);
+    const d = await r.json();
+    const el = document.getElementById(safeId);
+    if (el) {
+      el.style.display = '';
+      el.textContent = d.ok ? d.latency + 's' : (d.error || '失败');
+      el.className = 'text-[9px] ' + (d.ok ? (d.latency < 2 ? 'text-success' : d.latency < 5 ? 'text-warn' : 'text-danger') : 'text-danger');
+    }
+    showToast(d.ok, d.ok ? model + ': ' + d.latency + 's' : '失败: ' + (d.error || ''));
+  } catch(e) {
+    showToast(false, '请求失败');
+  }
+}
+
+// ===================== VANILLA: Settings / Restart / Toast / Diag / Bench =====================
+function openSettings() {
+  document.getElementById('settingsOverlay').style.display = 'flex';
+  loadSettingsNative();
+}
+function closeSettings() { document.getElementById('settingsOverlay').style.display = 'none'; }
+
+async function loadSettingsNative() {
+  try {
+    const r = await fetch('/api/settings');
+    const d = await r.json();
+    document.getElementById('settingsPollInterval').value = d.poll_interval || '5';
+    document.getElementById('settingsFallbackThresh').value = d.alert_fallback_threshold || '3';
+    document.getElementById('settingsLatencyThresh').value = d.alert_latency_threshold || '10';
+  } catch(e) {}
+}
+
+async function saveSettingsNative() {
+  try {
+    const body = JSON.stringify({
+      poll_interval: document.getElementById('settingsPollInterval').value,
+      alert_fallback_threshold: document.getElementById('settingsFallbackThresh').value,
+      alert_latency_threshold: document.getElementById('settingsLatencyThresh').value
+    });
+    await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
+    showToast(true, '设置已保存');
+    closeSettings();
+  } catch(e) { showToast(false, '保存失败'); }
+}
+
+async function doRestartNative(svc) {
+  showToast(true, '重启中...');
+  try {
+    const r = await fetch('/api/restart/' + svc, { method: 'POST' });
+    const d = await r.json();
+    showToast(d.ok, svc + ' ' + (d.ok ? '已重启' : '失败'));
+  } catch(e) { showToast(false, '请求失败'); }
+}
+
+function showToast(ok, msg) {
+  const el = document.getElementById('toast');
+  el.className = 'fixed bottom-8 left-1/2 -translate-x-1/2 z-50 px-5 py-2.5 rounded-xl text-sm font-medium shadow-lg toast';
+  el.classList.add(ok ? 'bg-accent text-bg' : 'bg-[#b85c5c] text-white');
+  el.textContent = msg;
+  el.style.display = 'block';
+  setTimeout(() => { el.style.display = 'none'; }, 2500);
+}
+
+// DIAGNOSE
+function openDiag() {
+  document.getElementById('diagOverlay').style.display = 'flex';
+  document.getElementById('diagContent').innerHTML = '<div class="text-center py-6"><div class="spin inline-block w-5 h-5 border border-border border-t-accent rounded-full mb-2"></div><p class="text-xs text-text-muted">正在检测...</p></div>';
+  runDiagNative();
+}
+function closeDiag() { document.getElementById('diagOverlay').style.display = 'none'; }
+
+async function runDiagNative() {
+  const container = document.getElementById('diagContent');
+  try {
+    const r = await fetch('/api/diagnose');
+    const d = await r.json();
+    const pass = d.steps ? d.steps.filter(s => s.ok).length : 0;
+    const total = d.steps ? d.steps.length : 0;
+    const healthy = d.healthy !== false;
+    let html = '<div class="flex items-center gap-2 mb-3">' +
+      '<div class="w-8 h-8 rounded-full flex items-center justify-center text-sm ' +
+      (healthy ? 'bg-success/20 text-success' : 'bg-danger/20 text-danger') +
+      '" style="background:' + (healthy ? 'rgba(126,168,126,0.2)' : 'rgba(184,92,92,0.2)') + ';color:' + (healthy ? '#7ea87e' : '#b85c5c') + '">' +
+      (healthy ? '✓' : '!') + '</div>' +
+      '<span class="text-sm font-semibold text-text">' + (healthy ? '链路健康' : '发现问题') + '</span>' +
+      '<span class="text-[11px] text-text-faint">' + pass + '/' + total + ' 通过</span></div>' +
+      '<div class="space-y-1.5">';
+    if (d.steps) {
+      for (const s of d.steps) {
+        html += '<div class="flex items-center justify-between py-2 px-3 rounded-lg" style="background:rgba(0,0,0,.15)">' +
+          '<div class="flex items-center gap-2">' +
+          '<span class="text-xs ' + (s.ok ? 'text-success' : 'text-danger') + '">' + (s.ok ? '✓' : '✗') + '</span>' +
+          '<span class="text-[12px] text-text">' + (s.name || '') + '</span></div>' +
+          '<span class="text-[10px] text-text-faint font-mono">' + (s.detail || '') + '</span></div>';
+      }
+    }
+    html += '</div>';
+    container.innerHTML = html;
+  } catch(e) {
+    container.innerHTML = '<div class="text-center py-4"><span class="text-xs text-danger">诊断请求失败</span></div>';
+  }
+}
+
+// BENCHMARK
+let benchEs = null;
+
+function openBench() {
+  document.getElementById('benchOverlay').style.display = 'flex';
+  document.getElementById('benchBtn').textContent = '全部测速';
+  document.getElementById('benchBtn').classList.remove('btn-danger');
+  document.getElementById('benchBtn').classList.add('btn-accent');
+  document.getElementById('benchStopBtn').style.display = 'none';
+  document.getElementById('benchResults').innerHTML = '<p class="text-xs text-text-faint text-center py-4">点击「全部测速」开始</p>';
+}
+function closeBench() {
+  if (benchEs) { benchEs.close(); benchEs = null; }
+  document.getElementById('benchOverlay').style.display = 'none';
+}
+function stopBenchNative() {
+  if (benchEs) { benchEs.close(); benchEs = null; }
+  const btn = document.getElementById('benchBtn');
+  btn.textContent = '已停止';
+  btn.classList.add('btn-danger');
+  btn.classList.remove('btn-accent');
+  document.getElementById('benchStopBtn').style.display = 'none';
+}
+
+function runBenchNative() {
+  const btn = document.getElementById('benchBtn');
+  const stopBtn = document.getElementById('benchStopBtn');
+  const container = document.getElementById('benchResults');
+  btn.textContent = '测速中...';
+  stopBtn.style.display = 'inline-block';
+  container.innerHTML = '';
+  const results = [];
+  let timedOut = false;
+  benchEs = new EventSource('/api/test-all');
+  const safety = setTimeout(() => {
+    timedOut = true;
+    if (benchEs) { benchEs.close(); benchEs = null; }
+    btn.textContent = '超时';
+    btn.classList.add('btn-danger'); btn.classList.remove('btn-accent');
+    stopBtn.style.display = 'none';
+  }, 45000);
+  benchEs.onmessage = function(e) {
+    if (e.data === '[DONE]') {
+      clearTimeout(safety);
+      benchEs.close(); benchEs = null;
+      btn.textContent = '完成';
+      btn.classList.add('btn-success'); btn.classList.remove('btn-accent');
+      stopBtn.style.display = 'none';
+      return;
+    }
+    try {
+      const r = JSON.parse(e.data);
+      const idx = results.findIndex(x => x.model === r.model);
+      if (idx >= 0) results[idx] = r; else results.push(r);
+      renderBenchResults(container, results);
+    } catch(_) {}
+  };
+  benchEs.onerror = function() {
+    clearTimeout(safety);
+    if (benchEs) { benchEs.close(); benchEs = null; }
+    if (!timedOut) {
+      btn.textContent = '中断';
+      btn.classList.add('btn-danger'); btn.classList.remove('btn-accent');
+      stopBtn.style.display = 'none';
+    }
+  };
+}
+
+function renderBenchResults(container, results) {
+  let html = '';
+  for (const r of results) {
+    const icon = r.ok ? '✓' : '✗';
+    const latency = r.ok ? r.latency.toFixed(1) + 's' : (r.error || '超时');
+    const latCls = r.ok ? (r.latency < 2 ? 'text-success' : r.latency < 5 ? 'text-warn' : 'text-danger') : 'text-text-faint';
+    html += '<div class="flex items-center justify-between py-2.5 px-3 rounded-lg" style="background:rgba(0,0,0,.15)">' +
+      '<div class="flex items-center gap-3">' +
+      '<span class="text-xs font-bold">' + icon + '</span>' +
+      '<span class="text-[12px] text-text">' + r.model + '</span></div>' +
+      '<div class="flex items-center gap-4">' +
+      '<span class="text-[12px] font-mono">' + latency + '</span>' +
+      '<span class="text-[9px] text-text-faint bg-border/30 px-1.5 py-0.5 rounded">' + (r.status || '—') + '</span></div></div>';
+  }
+  container.innerHTML = html;
+}
+</script>
+</body>
+</html>
